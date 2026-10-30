@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图文视频轻量化去重&去水印工具</title>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/ffmpeg.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui, sans-serif}
+body{background:#f4f7fa;color:#222;padding:12px}
+.tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+.tab{padding:10px 16px;border:none;border-radius:8px;background:#e6ecf4;cursor:pointer;font-size:15px}
+.tab.active{background:#2563eb;color:#fff}
+.panel{display:none}
+.panel.active{display:block}
+.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px #00000012}
+input[type="file"]{margin:8px 0}
+button{background:#2563eb;color:white;border:none;padding:11px 18px;border-radius:8px;font-size:15px;cursor:pointer;margin:6px 4px}
+button:disabled{background:#94a3b8;cursor:not-allowed}
+.slider-row{margin:10px 0}
+.slider-row label{display:block;margin-bottom:4px;font-size:14px}
+input[type="range"]{width:100%}
+.check-row{margin:10px 0}
+.preview{max-width:100%;max-height:320px;margin:10px 0;border:1px solid #ddd;border-radius:8px}
+.log{font-size:13px;color:#475569;margin:8px 0;min-height:20px}
+.watermark-pos{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.watermark-pos button{padding:7px 10px;font-size:13px;background:#e6ecf4;color:#222}
+.watermark-pos button.selected{background:#2563eb;color:#fff}
+#canvasBox{position:relative}
+#markCanvas{border:1px solid #ddd;border-radius:8px;max-width:100%}
+</style>
+</head>
+<body>
+<div class="tabs">
+<button class="tab active" data-tab="img">🖼️ 图片去重</button>
+<button class="tab" data-tab="vid">🎬 视频去重</button>
+<button class="tab" data-tab="wm">💧 去水印</button>
+</div>
+
+<!-- ========== 图片去重面板 ========== -->
+<div class="panel active" id="img">
+<div class="card">
+<h3>图片去重（你的方案：叠低透原图+纹理+调色+裁切+微旋+噪点）</h3>
+<input type="file" id="imgFile" accept="image/*">
+<div class="slider-row">
+<label>副本透明度 (2~5%推荐)：<span id="imgOpVal">3</span>%</label>
+<input type="range" id="imgOpacity" min="1" max="8" value="3">
+</div>
+<div class="slider-row">
+<label>纹理强度：<span id="texVal">3</span></label>
+<input type="range" id="texStrength" min="1" max="10" value="3">
+</div>
+<div class="slider-row">
+<label>裁切比例：<span id="cropVal">1</span>%</label>
+<input type="range" id="imgCrop" min="0" max="3" value="1">
+</div>
+<div class="slider-row">
+<label>噪点强度：<span id="noiseVal">2</span></label>
+<input type="range" id="imgNoise" min="0" max="8" value="2">
+</div>
+<button id="imgRun">一键处理图片</button>
+<div class="log" id="imgLog"></div>
+<img class="preview" id="imgPreview">
+<a id="imgDownload" style="display:none"><button>保存图片</button></a>
+</div>
+</div>
+
+<!-- ========== 视频去重面板 ========== -->
+<div class="panel" id="vid">
+<div class="card">
+<h3>视频去重（默认轻量，画中画叠加可选）</h3>
+<input type="file" id="vidFile" accept="video/*">
+<div class="check-row">
+<label><input type="checkbox" id="vidOverlay"> 开启低透明画中画原图叠加（耗性能，手机慎用）</label>
+</div>
+<div class="slider-row">
+<label>画中画透明度：<span id="ovVal">4</span>%</label>
+<input type="range" id="ovOpacity" min="2" max="6" value="4">
+</div>
+<div class="slider-row">
+<label>抖动幅度：<span id="shakeVal">2</span></label>
+<input type="range" id="shake" min="0" max="6" value="2">
+</div>
+<div class="slider-row">
+<label>噪点强度：<span id="vNoiseVal">2</span></label>
+<input type="range" id="vNoise" min="0" max="6" value="2">
+</div>
+<div class="slider-row">
+<label>裁切比例：<span id="vCropVal">1</span>%</label>
+<input type="range" id="vidCrop" min="0" max="3" value="1">
+</div>
+<button id="vidRun">一键处理视频</button>
+<div class="log" id="vidLog">ffmpeg首次加载需要一点时间，请耐心等待</div>
+<video class="preview" id="vidPreview" controls></video>
+<a id="vidDownload" style="display:none"><button>下载视频</button></a>
+</div>
+</div>
+
+<!-- ========== 去水印面板 ========== -->
+<div class="panel" id="wm">
+<div class="card">
+<h3>去水印（图片/视频，小红书/抖音/B站角落水印）</h3>
+<input type="file" id="wmFile" accept="image/*,video/*">
+<div class="watermark-pos">
+<button data-pos="rt">右上角</button>
+<button data-pos="rb" class="selected">右下角（抖音/小红书常用）</button>
+<button data-pos="lb">左下角</button>
+<button data-pos="lt">左上角</button>
+<button data-pos="bot">底部居中（B站）</button>
+</div>
+<div class="check-row">
+<label>处理模式：
+<select id="wmMode">
+<option value="crop">裁切（最稳，推荐）</option>
+<option value="blur">模糊</option>
+<option value="fill">填充（仅图片）</option>
+</select>
+</label>
+</div>
+<button id="wmRun">去水印处理</button>
+<div class="log" id="wmLog"></div>
+<div id="canvasBox"><canvas id="markCanvas"></canvas></div>
+<a id="wmDownload" style="display:none"><button>保存结果</button></a>
+</div>
+</div>
+
+<script>
+// Tab切换
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+t.classList.add('active');
+document.getElementById(t.dataset.tab).classList.add('active');
+})
+
+// ===== 图片去重逻辑 =====
+const imgOp = document.getElementById('imgOpacity');
+const texS = document.getElementById('texStrength');
+const imgCr = document.getElementById('imgCrop');
+const imgNs = document.getElementById('imgNoise');
+imgOp.oninput=()=>document.getElementById('imgOpVal').textContent=imgOp.value;
+texS.oninput=()=>document.getElementById('texVal').textContent=texS.value;
+imgCr.oninput=()=>document.getElementById('cropVal').textContent=imgCr.value;
+imgNs.oninput=()=>document.getElementById('noiseVal').textContent=imgNs.value;
+
+document.getElementById('imgRun').onclick=async()=>{
+const f=document.getElementById('imgFile').files[0];
+if(!f) return alert("先上传图片！");
+const log=document.getElementById('imgLog');log.textContent="处理中...";
+const img=new Image();img.src=URL.createObjectURL(f);
+await new Promise(r=>img.onload=r);
+const c=document.createElement('canvas');
+const w=img.width,h=img.height;
+const cropPct=imgCr.value/100;
+const cw=w*(1-cropPct*2),ch=h*(1-cropPct*2);
+c.width=cw;c.height=ch;
+const ctx=c.getContext('2d');
+ctx.drawImage(img,w*cropPct,h*cropPct,cw,ch,0,0,cw,ch);
+// 叠低透明度原图副本
+ctx.globalAlpha=imgOp.value/100;
+ctx.drawImage(img,w*cropPct,h*cropPct,cw,ch,0,0,cw,ch);
+ctx.globalAlpha=1;
+// 微缩放+微旋转 随机±0.3度
+const rot=(Math.random()-0.5)*0.6*Math.PI/180;
+ctx.save();
+ctx.translate(cw/2,ch/2);
+ctx.rotate(rot);
+const sc=0.98+Math.random()*0.04;
+ctx.scale(sc,sc);
+ctx.drawImage(c,-cw/2,-ch/2,cw,ch);
+ctx.restore();
+// 隐形纹理层
+const tex=ctx.createImageData(cw,ch);
+for(let i=0;i<tex.data.length;i+=4){
+if(Math.random()<texS.value/100){
+tex.data[i]=Math.random()*255;
+tex.data[i+1]=Math.random()*255;
+tex.data[i+2]=Math.random()*255;
+tex.data[i+3]=15;
+}
+}
+ctx.putImageData(tex,0,0);
+// 弱噪点
+const nd=ctx.createImageData(cw,ch);
+for(let i=0;i<nd.data.length;i+=4){
+if(Math.random()<imgNs.value/100){
+const v=(Math.random()-0.5)*12;
+nd.data[i]+=v;nd.data[i+1]+=v;nd.data[i+2]+=v;nd.data[i+3]=255;
+}
+}
+ctx.putImageData(nd,0,0);
+// 轻微调色
+const id=ctx.getImageData(0,0,cw,ch);
+for(let i=0;i<id.data.length;i+=4){
+id.data[i]=Math.min(255,Math.max(0,id.data[i]+(Math.random()-0.5)*6));
+id.data[i+1]=Math.min(255,Math.max(0,id.data[i+1]+(Math.random()-0.5)*6));
+id.data[i+2]=Math.min(255,Math.max(0,id.data[i+2]+(Math.random()-0.5)*6));
+}
+ctx.putImageData(id,0,0);
+const url=c.toDataURL('image/png');
+document.getElementById('imgPreview').src=url;
+const a=document.getElementById('imgDownload');
+a.href=url;a.download="img_rewrite.png";a.style.display="block";
+log.textContent="✅图片处理完成";
+}
+
+// ===== 视频FFmpeg初始化 =====
+const {FFmpeg}=FFmpegWASM;
+let ffmpeg=null;
+async function getFfmpeg(){
+if(ffmpeg) return ffmpeg;
+ffmpeg=new FFmpeg({log:m=>document.getElementById('vidLog').textContent=m});
+await ffmpeg.load();
+return ffmpeg;
+}
+
+document.getElementById('vidRun').onclick=async()=>{
+const f=document.getElementById('vidFile').files[0];
+if(!f) return alert("先上传视频");
+const log=document.getElementById('vidLog');
+log.textContent="加载ffmpeg...";
+const ff=await getFfmpeg();
+const b=await f.arrayBuffer();
+ff.writeFile('in.mp4',new Uint8Array(b));
+let filter=``;
+const cr=document.getElementById('vidCrop').value/100;
+const sh=document.getElementById('shake').value;
+const ns=document.getElementById('vNoise').value;
+const ovEn=document.getElementById('vidOverlay').checked;
+const ovOp=document.getElementById('ovOpacity').value/100;
+filter+=`crop=iw*(1-${cr*2}):ih*(1-${cr*2}),`;
+if(sh>0) filter+=`shake=${sh}:0.05,`;
+if(ns>0) filter+=`noise=alls=${ns}:allt=u,`;
+filter+=`eq=brightness=${(Math.random()-0.5)*0.04}:contrast=${1+(Math.random()-0.5)*0.03},`;
+filter=filter.replace(/,$/,'');
+let cmd=['-i','in.mp4'];
+if(ovEn){
+cmd.push('-i','in.mp4','-filter_complex',`[0:v]${filter}[a];[1:v]${filter}[b];[a][b]blend=all_mode=normal:opacity=${ovOp}`);
+}else{
+cmd.push('-vf',filter);
+}
+cmd.push('-c:a','copy','out.mp4');
+log.textContent="正在编码视频，不要关闭页面！手机长视频会很慢";
+await ff.run(...cmd);
+const dat=ff.readFile('out.mp4');
+const u=URL.createObjectURL(new Blob([dat],{type:'video/mp4'}));
+document.getElementById('vidPreview').src=u;
+const a=document.getElementById('vidDownload');
+a.href=u;a.download="video_rewrite.mp4";a.style.display="block";
+log.textContent="✅视频处理完成";
+}
+document.getElementById('ovOpacity').oninput=()=>document.getElementById('ovVal').textContent=document.getElementById('ovOpacity').value;
+document.getElementById('shake').oninput=()=>document.getElementById('shakeVal').textContent=document.getElementById('shake').value;
+document.getElementById('vNoise').oninput=()=>document.getElementById('vNoiseVal').textContent=document.getElementById('vNoise').value;
+document.getElementById('vidCrop').oninput=()=>document.getElementById('vCropVal').textContent=document.getElementById('vidCrop').value;
+
+// ===== 去水印 =====
+let selPos='rb';
+document.querySelectorAll('.watermark-pos button').forEach(btn=>{
+btn.onclick=()=>{
+document.querySelectorAll('.watermark-pos button').forEach(x=>x.classList.remove('selected'));
+btn.classList.add('selected');
+selPos=btn.dataset.pos;
+}
+})
+document.getElementById('wmRun').onclick=async()=>{
+const f=document.getElementById('wmFile').files[0];
+if(!f) return alert("上传素材");
+const log=document.getElementById('wmLog');log.textContent="处理";
+const isImg=f.type.startsWith('image');
+const canvas=document.getElementById('markCanvas');
+const ctx=canvas.getContext('2d');
+if(isImg){
+const img=new Image();img.src=URL.createObjectURL(f);
+await new Promise(r=>img.onload=r);
+canvas.width=img.width;canvas.height=img.height;
+ctx.drawImage(img,0,0);
+let x,y,w,h;
+const pw=img.width,ph=img.height;
+switch(selPos){
+case 'rt':x=pw*0.78;y=0;w=pw*0.22;h=ph*0.18;break;
+case 'rb':x=pw*0.78;y=ph*0.82;w=pw*0.22;h=ph*0.18;break;
+case 'lb':x=0;y=ph*0.82;w=pw*0.22;h=ph*0.18;break;
+case 'lt':x=0;y=0;w=pw*0.22;h=ph*0.18;break;
+case 'bot':x=0;y=ph*0.85;w=pw;h=ph*0.15;break;
+}
+const mode=document.getElementById('wmMode').value;
+if(mode==='crop'){
+let nx=0,ny=0,nw=pw,nh=ph;
+if(selPos==='rt') nw=pw*0.78;
+if(selPos==='rb'){nw=pw*0.78;ny=0;nh=ph*0.82;}
+if(selPos==='lb'){nw=pw*0.78;ny=0;nh=ph*0.82;}
+if(selPos==='lt') nw=pw*0.78;
+if(selPos==='bot') nh=ph*0.85;
+canvas.width=nw;canvas.height=nh;
+ctx.drawImage(img,nx,ny,nw,nh,0,0,nw,nh);
+}else if(mode==='blur'){
+ctx.filter='blur(6px)';ctx.fillStyle='#888';ctx.fillRect(x,y,w,h);ctx.filter='none';
+}else if(mode==='fill'){
+const p=ctx.getImageData(x-2,y-2,4,4);
+ctx.fillStyle=`rgb(${p.data[0]},${p.data[1]},${p.data[2]})`;
+ctx.fillRect(x,y,w,h);
+}
+const url=canvas.toDataURL('image/png');
+const a=document.getElementById('wmDownload');
+a.href=url;a.download="watermark_removed.png";a.style.display="block";
+log.textContent="✅图片去水印完成";
+}else{
+log.textContent="视频去水印仅裁切模式稳定";
+const ff=await getFfmpeg();
+const b=await f.arrayBuffer();
+ff.writeFile('wm_in.mp4',new Uint8Array(b));
+let crFilter='';
+switch(selPos){
+case 'rt':crFilter='crop=iw*0.78:ih';break;
+case 'rb':crFilter='crop=iw*0.78:ih*0.82';break;
+case 'lb':crFilter='crop=iw*0.78:ih*0.82';break;
+case 'lt':crFilter='crop=iw*0.78:ih';break;
+case 'bot':crFilter='crop=iw:ih*0.85';break;
+}
+await ff.run('-i','wm_in.mp4','-vf',crFilter,'-c:a','copy','wm_out.mp4');
+const dat=ff.readFile('wm_out.mp4');
+const u=URL.createObjectURL(new Blob([dat],{type:'video/mp4'}));
+const a=document.getElementById('wmDownload');
+a.href=u;a.download="video_nowatermark.mp4";a.style.display="block";
+log.textContent="✅视频裁切去水印完成";
+}
+}
+</script>
+</body>
+</html>
